@@ -6,3 +6,7 @@ edition = "2024"
 [dependencies]
 toml = "1.0"
 serde = "1.0"
+qkd014_server_gen = { path = "api/qkd014-server-gen" }
+
+[workspace]
+members = ["api/qkd014-server-gen"]

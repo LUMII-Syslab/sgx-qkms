@@ -1566,6 +1566,8 @@ dependencies = [
  "axum-extra",
  "headers",
  "http",
+ "hyper",
+ "hyper-util",
  "qkd014_server_gen",
  "rustls",
  "rustls-pemfile",
@@ -1573,6 +1575,7 @@ dependencies = [
  "tokio",
  "tokio-rustls",
  "toml",
+ "tower",
  "x509-parser",
 ]
 

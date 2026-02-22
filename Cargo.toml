@@ -17,6 +17,9 @@ rustls = "0.23.36"
 rustls-pemfile = "2"
 tokio-rustls = "0.26"
 x509-parser = "0.16"
+hyper = { version = "1", features = ["http1", "server"] }
+hyper-util = { version = "0.1", features = ["tokio"] }
+tower = { version = "0.5", features = ["util"] }
 
 [workspace]
 members = ["api/qkd014-server-gen"]

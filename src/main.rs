@@ -1,12 +1,16 @@
+use axum::{Router, extract::Extension, routing::get};
+use hyper::{Request, body::Incoming, server::conn::http1, service::service_fn};
+use hyper_util::rt::TokioIo;
 use rustls::{
     ClientConfig, RootCertStore, ServerConfig,
     pki_types::{CertificateDer, PrivateKeyDer, ServerName},
     server::WebPkiClientVerifier,
 };
-use std::{env, fs::File, io::BufReader, sync::Arc};
+use std::{convert::Infallible, env, fs::File, io::BufReader, sync::Arc};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::{TcpListener, TcpStream};
 use tokio_rustls::{TlsAcceptor, TlsConnector};
+use tower::ServiceExt;
 use x509_parser::{
     extensions::{GeneralName, ParsedExtension},
     prelude::parse_x509_certificate,
@@ -81,6 +85,13 @@ fn extract_client_identity(cert: &CertificateDer<'_>) -> Option<String> {
     None
 }
 
+#[derive(Clone)]
+struct ClientIdentity(String);
+
+async fn hello_handler(Extension(client_identity): Extension<ClientIdentity>) -> String {
+    format!("hello, {}", client_identity.0)
+}
+
 async fn run_sample_server() -> Result<(), Box<dyn std::error::Error>> {
     const ADDR: &str = "127.0.0.1:8443";
     const SERVER_CERT_PATH: &str = "certs/sae/server.crt";
@@ -97,6 +108,7 @@ async fn run_sample_server() -> Result<(), Box<dyn std::error::Error>> {
 
     let acceptor = TlsAcceptor::from(Arc::new(server_config));
     let listener = TcpListener::bind(ADDR).await?;
+    let app = Router::new().route("/hello", get(hello_handler));
     println!("sample mTLS server listening on {ADDR}");
 
     loop {
@@ -105,9 +117,10 @@ async fn run_sample_server() -> Result<(), Box<dyn std::error::Error>> {
             Err(e) => return Err(e.into()),
         };
         let acceptor = acceptor.clone();
+        let app = app.clone();
 
         tokio::spawn(async move {
-            let mut tls_stream = match acceptor.accept(tcp_stream).await {
+            let tls_stream = match acceptor.accept(tcp_stream).await {
                 Ok(stream) => stream,
                 Err(e) => {
                     eprintln!("TLS accept failed for {peer_addr}: {e}");
@@ -122,18 +135,28 @@ async fn run_sample_server() -> Result<(), Box<dyn std::error::Error>> {
                 .and_then(|certs| certs.first())
                 .and_then(extract_client_identity)
                 .unwrap_or_else(|| "stranger".to_string());
+            let client_name_for_service = client_name.clone();
 
-            let response = format!("hello, {client_name}\n");
-            if let Err(e) = tls_stream.write_all(response.as_bytes()).await {
-                eprintln!("Write failed for {peer_addr}: {e}");
+            let service = service_fn(move |mut req: Request<Incoming>| {
+                let app = app.clone();
+                let identity = ClientIdentity(client_name_for_service.clone());
+                async move {
+                    req.extensions_mut().insert(identity);
+                    let req = req.map(axum::body::Body::new);
+                    let response = app.oneshot(req).await.expect("router is infallible");
+                    Ok::<_, Infallible>(response)
+                }
+            });
+
+            if let Err(e) = http1::Builder::new()
+                .serve_connection(TokioIo::new(tls_stream), service)
+                .await
+            {
+                eprintln!("HTTP serve failed for {peer_addr}: {e}");
                 return;
             }
-            if let Err(e) = tls_stream.shutdown().await {
-                eprintln!("Shutdown failed for {peer_addr}: {e}");
-                return;
-            }
 
-            println!("served greeting for '{client_name}' from {peer_addr}");
+            println!("served axum request for '{client_name}' from {peer_addr}");
         });
     }
 }
@@ -156,9 +179,22 @@ async fn run_sample_client() -> Result<(), Box<dyn std::error::Error>> {
     let server_name = ServerName::try_from("localhost")?;
     let mut tls_stream = connector.connect(server_name, tcp_stream).await?;
 
+    tls_stream
+        .write_all(b"GET /hello HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n")
+        .await?;
+
     let mut response = Vec::new();
-    tls_stream.read_to_end(&mut response).await?;
-    println!("{}", String::from_utf8_lossy(&response).trim_end());
+    if let Err(e) = tls_stream.read_to_end(&mut response).await {
+        if !e.to_string().contains("close_notify") {
+            return Err(e.into());
+        }
+    }
+    let response_text = String::from_utf8_lossy(&response);
+    let body = response_text
+        .split_once("\r\n\r\n")
+        .map(|(_, body)| body.trim())
+        .unwrap_or_else(|| response_text.trim());
+    println!("{body}");
 
     Ok(())
 }

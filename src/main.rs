@@ -1,21 +1,20 @@
-use hyper::service::Service;
-use hyper::{Request, body::Incoming, server::conn::http1, service::service_fn};
-use hyper_util::rt::TokioIo;
 use rustls::{
-    ClientConfig, RootCertStore, ServerConfig,
+    ClientConfig, ClientConnection, RootCertStore, ServerConfig, ServerConnection, StreamOwned,
     pki_types::{CertificateDer, PrivateKeyDer, ServerName},
     server::WebPkiClientVerifier,
 };
 use rustls_mbedcrypto_provider::mbedtls_crypto_provider;
-use std::{convert::Infallible, env, fs::File, io::BufReader, sync::Arc};
-use tokio::io::{AsyncReadExt, AsyncWriteExt};
-use tokio::net::{TcpListener, TcpStream};
-use tokio_rustls::{TlsAcceptor, TlsConnector};
+use std::error::Error;
+use std::io::{BufReader, Read, Write};
+use std::net::{TcpListener, TcpStream};
+use std::{env, fs::File, sync::Arc};
 use x509_parser::{
     extensions::{GeneralName, ParsedExtension},
     prelude::parse_x509_certificate,
 };
 mod etsi014_handler;
+mod api_models;
+mod http_protocol;
 
 fn load_ca_cert() -> RootCertStore {
     const CA_CERT_PATH: &str = "certs/ca/ca.crt";
@@ -88,7 +87,7 @@ fn extract_client_identity(cert: &CertificateDer<'_>) -> Option<String> {
     None
 }
 
-async fn run_sample_server() -> Result<(), Box<dyn std::error::Error>> {
+fn run_sample_server() -> Result<(), Box<dyn Error>> {
     const ADDR: &str = "127.0.0.1:8443";
     const SERVER_CERT_PATH: &str = "certs/sae/server.crt";
     const SERVER_KEY_PATH: &str = "certs/sae/server.key";
@@ -103,68 +102,51 @@ async fn run_sample_server() -> Result<(), Box<dyn std::error::Error>> {
         .with_client_cert_verifier(client_verifier)
         .with_single_cert(server_cert_chain, server_key)?;
 
-    let acceptor = TlsAcceptor::from(Arc::new(server_config));
-    let listener = TcpListener::bind(ADDR).await?;
-    let api_service =
-        qkd014_server_gen::server::Service::<
-            etsi014_handler::Etsi014Handler,
-            etsi014_handler::RequestContext,
-        >::new(etsi014_handler::Etsi014Handler, false);
+    let server_config = Arc::new(server_config);
+    let listener = TcpListener::bind(ADDR)?;
     println!("sample mTLS server listening on {ADDR}");
 
     loop {
-        let (tcp_stream, peer_addr) = match listener.accept().await {
+        let (tcp_stream, peer_addr) = match listener.accept() {
             Ok(conn) => conn,
             Err(e) => return Err(e.into()),
         };
-        let acceptor = acceptor.clone();
-        let api_service = api_service.clone();
+        let server_config = server_config.clone();
 
-        tokio::spawn(async move {
-            let tls_stream = match acceptor.accept(tcp_stream).await {
-                Ok(stream) => stream,
-                Err(e) => {
-                    eprintln!("TLS accept failed for {peer_addr}: {e}");
-                    return;
-                }
-            };
-
-            let client_name = tls_stream
-                .get_ref()
-                .1
-                .peer_certificates()
-                .and_then(|certs| certs.first())
-                .and_then(extract_client_identity)
-                .unwrap_or_else(|| "stranger".to_string());
-            let client_name_for_service = client_name.clone();
-
-            let service = service_fn(move |req: Request<Incoming>| {
-                let api_service = api_service.clone();
-                let context =
-                    etsi014_handler::RequestContext::new(client_name_for_service.clone());
-                async move {
-                    let response = api_service
-                        .call((req, context))
-                        .await
-                        .expect("generated service failed");
-                    Ok::<_, Infallible>(response)
-                }
-            });
-
-            if let Err(e) = http1::Builder::new()
-                .serve_connection(TokioIo::new(tls_stream), service)
-                .await
-            {
-                eprintln!("HTTP serve failed for {peer_addr}: {e}");
-                return;
+        std::thread::spawn(move || {
+            if let Err(e) = handle_tls_connection(tcp_stream, server_config) {
+                eprintln!("serve failed for {peer_addr}: {e}");
             }
-
-            println!("served axum request for '{client_name}' from {peer_addr}");
         });
     }
 }
 
-async fn run_sample_client() -> Result<(), Box<dyn std::error::Error>> {
+fn handle_tls_connection(
+    mut tcp_stream: TcpStream,
+    server_config: Arc<ServerConfig>,
+) -> Result<(), Box<dyn Error>> {
+    let mut server_conn = ServerConnection::new(server_config)?;
+    while server_conn.is_handshaking() {
+        server_conn.complete_io(&mut tcp_stream)?;
+    }
+
+    let client_identity = server_conn
+        .peer_certificates()
+        .and_then(|certs| certs.first())
+        .and_then(extract_client_identity)
+        .unwrap_or_else(|| "stranger".to_string());
+
+    let mut tls_stream = StreamOwned::new(server_conn, tcp_stream);
+    let request = http_protocol::read_http_request(&mut tls_stream)?;
+    let parsed = http_protocol::parse_http_request(&request)?;
+    let response = etsi014_handler::route_request(&parsed, &client_identity);
+    tls_stream.write_all(&response.to_http_bytes())?;
+    tls_stream.flush()?;
+    println!("served request for '{client_identity}'");
+    Ok(())
+}
+
+fn run_sample_client() -> Result<(), Box<dyn Error>> {
     const ADDR: &str = "127.0.0.1:8443";
     const CLIENT_CERT_PATH: &str = "certs/sae/client.crt";
     const CLIENT_KEY_PATH: &str = "certs/sae/client.key";
@@ -178,23 +160,22 @@ async fn run_sample_client() -> Result<(), Box<dyn std::error::Error>> {
         .with_root_certificates(ca_cert_store)
         .with_client_auth_cert(client_cert_chain, client_key)?;
 
-    let connector = TlsConnector::from(Arc::new(client_config));
-    let tcp_stream = TcpStream::connect(ADDR).await?;
+    let mut tcp_stream = TcpStream::connect(ADDR)?;
     let server_name = ServerName::try_from("localhost")?;
-    let mut tls_stream = connector.connect(server_name, tcp_stream).await?;
+    let mut client_conn = ClientConnection::new(Arc::new(client_config), server_name)?;
+    while client_conn.is_handshaking() {
+        client_conn.complete_io(&mut tcp_stream)?;
+    }
+    let mut tls_stream = StreamOwned::new(client_conn, tcp_stream);
 
     tls_stream
         .write_all(
-            b"GET /api/v1/keys/test-slave-sae/status HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n",
-        )
-        .await?;
+            b"GET /api/v1/keys/test-slave-sae2/status HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n",
+        )?;
+    tls_stream.flush()?;
 
     let mut response = Vec::new();
-    if let Err(e) = tls_stream.read_to_end(&mut response).await {
-        if !e.to_string().contains("close_notify") {
-            return Err(e.into());
-        }
-    }
+    let _ = tls_stream.read_to_end(&mut response);
     let response_text = String::from_utf8_lossy(&response);
     let json = response_text
         .split_once("\r\n\r\n")
@@ -205,21 +186,20 @@ async fn run_sample_client() -> Result<(), Box<dyn std::error::Error>> {
     Ok(())
 }
 
-#[tokio::main]
-async fn main() {
+fn main() {
     let mut args = env::args();
     let _program = args.next();
     let mode = args.next();
 
     match mode.as_deref() {
         Some("server") => {
-            if let Err(e) = run_sample_server().await {
+            if let Err(e) = run_sample_server() {
                 eprintln!("server error: {e}");
                 std::process::exit(1);
             }
         }
         Some("client") => {
-            if let Err(e) = run_sample_client().await {
+            if let Err(e) = run_sample_client() {
                 eprintln!("client error: {e}");
                 std::process::exit(1);
             }

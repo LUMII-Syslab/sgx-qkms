@@ -21,7 +21,7 @@ SERVER_PID=$!
 echo "Server PID: $SERVER_PID"
 
 # wait for the server to start listening
-while ! grep -q "listening" logs/server.txt; do
+while ! nc -z localhost 8443; do
     sleep 0.1
 done
 

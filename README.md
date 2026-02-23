@@ -29,7 +29,7 @@ openapi-generator-cli help
 # 5) Generate API handlers
 openapi-generator-cli generate \
   -i api/etsigsqkd014.yaml \
-  -g rust-axum \
+  -g rust-server \
   -o api/qkd014-server-gen \
   --additional-properties=packageName=qkd014_server_gen
 ```

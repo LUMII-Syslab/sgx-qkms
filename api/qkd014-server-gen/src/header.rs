@@ -1,7 +1,8 @@
-use std::{convert::TryFrom, fmt, ops::Deref};
-
 use chrono::{DateTime, Utc};
-use http::HeaderValue;
+use hyper::header::HeaderValue;
+use std::convert::TryFrom;
+use std::fmt;
+use std::ops::Deref;
 
 /// A struct to allow homogeneous conversion into a HeaderValue. We can't
 /// implement the From/Into trait on HeaderValue because we don't own
@@ -19,7 +20,7 @@ impl<T> Deref for IntoHeaderValue<T> {
     }
 }
 
-// Derive for each TryFrom<T> in http::HeaderValue
+// Derive for each TryFrom<T> in hyper::header::HeaderValue
 
 macro_rules! ihv_generate {
     ($t:ident) => {
@@ -30,10 +31,9 @@ macro_rules! ihv_generate {
                 match hdr_value.to_str() {
                     Ok(hdr_value) => match hdr_value.parse::<$t>() {
                         Ok(hdr_value) => Ok(IntoHeaderValue(hdr_value)),
-                        Err(e) => Err(format!(r#"Unable to parse {} as a string: {e}"#,
-                            stringify!($t))),
+                        Err(e) => Err(format!("Unable to parse {} as a string: {e}", stringify!($t))),
                     },
-                    Err(e) => Err(format!(r#"Unable to parse header {hdr_value:?} as a string - {e}"#)),
+                    Err(e) => Err(format!("Unable to parse header {hdr_value:?} as a string - {e}")),
                 }
             }
         }
@@ -74,7 +74,7 @@ impl TryFrom<HeaderValue> for IntoHeaderValue<Vec<String>> {
                     y => Some(y.to_string()),
                 })
                 .collect())),
-            Err(e) => Err(format!(r#"Unable to parse header: {hdr_value:?} as a string - {e}"#)),
+            Err(e) => Err(format!("Unable to parse header: {hdr_value:?} as a string - {e}")),
         }
     }
 }
@@ -85,7 +85,7 @@ impl TryFrom<IntoHeaderValue<Vec<String>>> for HeaderValue {
     fn try_from(hdr_value: IntoHeaderValue<Vec<String>>) -> Result<Self, Self::Error> {
        match HeaderValue::from_str(&hdr_value.0.join(", ")) {
            Ok(hdr_value) => Ok(hdr_value),
-           Err(e) => Err(format!(r#"Unable to convert {hdr_value:?} into a header - {e}"#))
+           Err(e) => Err(format!("Unable to convert {hdr_value:?} into a header - {e}"))
        }
     }
 }
@@ -98,9 +98,9 @@ impl TryFrom<HeaderValue> for IntoHeaderValue<String> {
     fn try_from(hdr_value: HeaderValue) -> Result<Self, Self::Error> {
         match hdr_value.to_str() {
             Ok(hdr_value) => Ok(IntoHeaderValue(hdr_value.to_string())),
-            Err(e) => Err(format!(r#"Unable to convert header {hdr_value:?} to {e}"#)),
+            Err(e) => Err(format!("Unable to convert header {hdr_value:?} to {e}")),
         }
-   }
+    }
 }
 
 impl TryFrom<IntoHeaderValue<String>> for HeaderValue {
@@ -109,13 +109,12 @@ impl TryFrom<IntoHeaderValue<String>> for HeaderValue {
     fn try_from(hdr_value: IntoHeaderValue<String>) -> Result<Self, Self::Error> {
         match HeaderValue::from_str(&hdr_value.0) {
             Ok(hdr_value) => Ok(hdr_value),
-            Err(e) => Err(format!(r#"Unable to convert {hdr_value:?} from a header {e}"#))
+            Err(e) => Err(format!("Unable to convert {hdr_value:?} from a header {e}"))
         }
     }
 }
 
-// Bool
-
+// bool
 impl TryFrom<HeaderValue> for IntoHeaderValue<bool> {
     type Error = String;
 
@@ -123,9 +122,9 @@ impl TryFrom<HeaderValue> for IntoHeaderValue<bool> {
         match hdr_value.to_str() {
             Ok(hdr_value) => match hdr_value.parse() {
                 Ok(hdr_value) => Ok(IntoHeaderValue(hdr_value)),
-                Err(e) => Err(format!(r#"Unable to parse bool from {hdr_value} - {e}"#)),
+                Err(e) => Err(format!("Unable to parse bool from {hdr_value} - {e}")),
             },
-            Err(e) => Err(format!(r#"Unable to convert {hdr_value:?} from a header {e}"#)),
+            Err(e) => Err(format!("Unable to convert {hdr_value:?} from a header {e}")),
         }
     }
 }
@@ -136,8 +135,8 @@ impl TryFrom<IntoHeaderValue<bool>> for HeaderValue {
     fn try_from(hdr_value: IntoHeaderValue<bool>) -> Result<Self, Self::Error> {
         match HeaderValue::from_str(&hdr_value.0.to_string()) {
             Ok(hdr_value) => Ok(hdr_value),
-            Err(e) => Err(format!(r#"Unable to convert: {hdr_value:?} into a header: {e}"#))
-       }
+            Err(e) => Err(format!("Unable to convert: {hdr_value:?} into a header: {e}"))
+        }
     }
 }
 
@@ -150,9 +149,9 @@ impl TryFrom<HeaderValue> for IntoHeaderValue<DateTime<Utc>> {
         match hdr_value.to_str() {
             Ok(hdr_value) => match DateTime::parse_from_rfc3339(hdr_value) {
                 Ok(date) => Ok(IntoHeaderValue(date.with_timezone(&Utc))),
-                Err(e) => Err(format!(r#"Unable to parse: {hdr_value} as date - {e}"#)),
+                Err(e) => Err(format!("Unable to parse: {hdr_value} as date - {e}")),
             },
-            Err(e) => Err(format!(r#"Unable to convert header {hdr_value:?} to string {e}"#)),
+            Err(e) => Err(format!("Unable to convert header {hdr_value:?} to string {e}")),
         }
     }
 }
@@ -163,8 +162,7 @@ impl TryFrom<IntoHeaderValue<DateTime<Utc>>> for HeaderValue {
     fn try_from(hdr_value: IntoHeaderValue<DateTime<Utc>>) -> Result<Self, Self::Error> {
         match HeaderValue::from_str(hdr_value.0.to_rfc3339().as_str()) {
             Ok(hdr_value) => Ok(hdr_value),
-            Err(e) => Err(format!(r#"Unable to convert {hdr_value:?} to a header: {e}"#)),
+            Err(e) => Err(format!("Unable to convert {hdr_value:?} to a header: {e}")),
         }
     }
 }
-

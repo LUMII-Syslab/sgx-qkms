@@ -1,0 +1,523 @@
+openapi: 3.0.1
+info:
+  description: |
+    ETSI GS QKD 014 REST-based Key Delivery API.
+
+    Security: SAEs connect to KMEs over HTTPS (TLS 1.2+) with mutual authentication.
+    The KME authenticates each request and identifies the calling SAE ID based on the
+    client certificate. The API does not define a caller-supplied SAE-ID header.
+
+    Methods:
+      - Get status
+      - Get key
+      - Get key with key IDs
+  title: ETSI QKD 014 REST-based Key Delivery API
+  version: 1.1.1
+servers:
+- description: KME hostname or IP (optionally with :port)
+  url: "https://{KME_hostname}"
+  variables:
+    KME_hostname:
+      default: localhost
+tags:
+- description: Operations related to the Key Management Entity (KME)
+  name: Key Management Entity
+paths:
+  /api/v1/keys/{slave_SAE_ID}/status:
+    get:
+      description: |
+        Returns Status from a KME to the calling SAE. Status contains information on keys
+        available to be requested by a master SAE for a specified slave SAE.
+      operationId: getStatus
+      parameters:
+      - description: URL-encoded SAE ID of slave SAE
+        explode: false
+        in: path
+        name: slave_SAE_ID
+        required: true
+        schema:
+          type: string
+        style: simple
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Status"
+          description: Status retrieved successfully
+        "400":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+          description: Bad request format
+        "401":
+          description: Unauthorized
+        "503":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+          description: Error on server side
+      summary: Get status of keys available
+      tags:
+      - Key Management Entity
+  /api/v1/keys/{slave_SAE_ID}/enc_keys:
+    get:
+      description: |
+        Returns Key container data from the KME to the calling master SAE.
+
+        GET is allowed only when the Key request is empty, or when only "number" and/or "size"
+        are used (as URI query parameters). Otherwise use POST.
+      operationId: getKeySimple
+      parameters:
+      - description: URL-encoded SAE ID of slave SAE
+        explode: false
+        in: path
+        name: slave_SAE_ID
+        required: true
+        schema:
+          type: string
+        style: simple
+      - description: Number of keys requested (default 1)
+        explode: true
+        in: query
+        name: number
+        required: false
+        schema:
+          minimum: 1
+          type: integer
+        style: form
+      - description: |
+          Size of each key in bits (default is key_size from Status).
+          Some KMEs require a multiple of 8 and may return 400 with message "size shall be a multiple of 8".
+        explode: true
+        in: query
+        name: size
+        required: false
+        schema:
+          minimum: 1
+          type: integer
+        style: form
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/KeyContainer"
+          description: Keys retrieved successfully
+        "400":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+          description: Bad request format
+        "401":
+          description: Unauthorized
+        "503":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+          description: Error on server side
+      summary: Get keys (simple GET form)
+      tags:
+      - Key Management Entity
+    post:
+      description: |
+        Returns Key container data from the KME to the calling master SAE.
+
+        Use POST for all cases other than the specified simple GET forms.
+      operationId: getKey
+      parameters:
+      - description: URL-encoded SAE ID of slave SAE
+        explode: false
+        in: path
+        name: slave_SAE_ID
+        required: true
+        schema:
+          type: string
+        style: simple
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/KeyRequest"
+        required: false
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/KeyContainer"
+          description: Keys retrieved successfully
+        "400":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+          description: Bad request format
+        "401":
+          description: Unauthorized
+        "503":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+          description: Error on server side
+      summary: Get keys
+      tags:
+      - Key Management Entity
+  /api/v1/keys/{master_SAE_ID}/dec_keys:
+    get:
+      description: |
+        Returns Key container from the KME to the calling slave SAE.
+
+        GET is allowed only when a single key_ID is specified and no extensions are used.
+        Otherwise use POST with Key IDs data format.
+
+        401 is returned if the SAE ID of the requestor was not an SAE ID that called "Get key"
+        resulting in the return of any of the requested key IDs.
+      operationId: getKeyWithIdsSimple
+      parameters:
+      - description: URL-encoded SAE ID of master SAE
+        explode: false
+        in: path
+        name: master_SAE_ID
+        required: true
+        schema:
+          type: string
+        style: simple
+      - description: ID of the key (UUID)
+        explode: true
+        in: query
+        name: key_ID
+        required: true
+        schema:
+          format: uuid
+          type: string
+        style: form
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/KeyContainer"
+          description: Keys retrieved successfully
+        "400":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+          description: Bad request format
+        "401":
+          description: Unauthorized
+        "503":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+          description: Error on server side
+      summary: Get keys with key ID (simple GET form)
+      tags:
+      - Key Management Entity
+    post:
+      description: |
+        Returns Key container from the KME to the calling slave SAE.
+
+        401 is returned if the SAE ID of the requestor was not an SAE ID that called "Get key"
+        resulting in the return of any of the requested key IDs.
+      operationId: getKeyWithIds
+      parameters:
+      - description: URL-encoded SAE ID of master SAE
+        explode: false
+        in: path
+        name: master_SAE_ID
+        required: true
+        schema:
+          type: string
+        style: simple
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/KeyIDs"
+        required: true
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/KeyContainer"
+          description: Keys retrieved successfully
+        "400":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+          description: Bad request format
+        "401":
+          description: Unauthorized
+        "503":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+          description: Error on server side
+      summary: Get keys with key IDs
+      tags:
+      - Key Management Entity
+components:
+  parameters:
+    SlaveSaeId:
+      description: URL-encoded SAE ID of slave SAE
+      explode: false
+      in: path
+      name: slave_SAE_ID
+      required: true
+      schema:
+        type: string
+      style: simple
+    MasterSaeId:
+      description: URL-encoded SAE ID of master SAE
+      explode: false
+      in: path
+      name: master_SAE_ID
+      required: true
+      schema:
+        type: string
+      style: simple
+    Number:
+      description: Number of keys requested (default 1)
+      explode: true
+      in: query
+      name: number
+      required: false
+      schema:
+        minimum: 1
+        type: integer
+      style: form
+    Size:
+      description: |
+        Size of each key in bits (default is key_size from Status).
+        Some KMEs require a multiple of 8 and may return 400 with message "size shall be a multiple of 8".
+      explode: true
+      in: query
+      name: size
+      required: false
+      schema:
+        minimum: 1
+        type: integer
+      style: form
+    KeyId:
+      description: ID of the key (UUID)
+      explode: true
+      in: query
+      name: key_ID
+      required: true
+      schema:
+        format: uuid
+        type: string
+      style: form
+  schemas:
+    Status:
+      example:
+        target_KME_ID: target_KME_ID
+        max_key_count: 1
+        max_key_per_request: 5
+        status_extension:
+          key: ""
+        max_key_size: 5
+        source_KME_ID: source_KME_ID
+        master_SAE_ID: master_SAE_ID
+        stored_key_count: 6
+        min_key_size: 2
+        slave_SAE_ID: slave_SAE_ID
+        max_SAE_ID_count: 7
+        key_size: 0
+      properties:
+        source_KME_ID:
+          type: string
+        target_KME_ID:
+          type: string
+        master_SAE_ID:
+          type: string
+        slave_SAE_ID:
+          type: string
+        key_size:
+          type: integer
+        stored_key_count:
+          type: integer
+        max_key_count:
+          type: integer
+        max_key_per_request:
+          type: integer
+        max_key_size:
+          type: integer
+        min_key_size:
+          type: integer
+        max_SAE_ID_count:
+          description: '"0" when the KME does not support key multicast'
+          type: integer
+        status_extension:
+          additionalProperties: true
+          description: "Optional, for future use"
+          type: object
+      required:
+      - key_size
+      - master_SAE_ID
+      - max_SAE_ID_count
+      - max_key_count
+      - max_key_per_request
+      - max_key_size
+      - min_key_size
+      - slave_SAE_ID
+      - source_KME_ID
+      - stored_key_count
+      - target_KME_ID
+      type: object
+    KeyRequest:
+      description: |
+        All fields are optional; the JSON body may be empty.
+        GET is only permitted for empty request or only number/size (as query params).
+      example:
+        number: 1
+        additional_slave_SAE_IDs:
+        - additional_slave_SAE_IDs
+        - additional_slave_SAE_IDs
+        size: 1
+        extension_optional:
+        - key: ""
+        - key: ""
+        extension_mandatory:
+        - key: ""
+        - key: ""
+      properties:
+        number:
+          description: Number of keys requested (default 1)
+          minimum: 1
+          type: integer
+        size:
+          description: Size of each key in bits (default key_size from Status)
+          minimum: 1
+          type: integer
+        additional_slave_SAE_IDs:
+          description: Optional list of additional slave SAE IDs for key multicast
+          items:
+            type: string
+          type: array
+        extension_mandatory:
+          description: Extensions that the KME must support or return 400
+          items:
+            additionalProperties: true
+            type: object
+          type: array
+        extension_optional:
+          description: Extensions that the KME may ignore
+          items:
+            additionalProperties: true
+            type: object
+          type: array
+      type: object
+    KeyContainer:
+      example:
+        keys:
+        - key_ID: 046b6c7f-0b8a-43b9-b35d-6489e6daee91
+          key_ID_extension:
+            key: ""
+          key: key
+          key_extension:
+            key: ""
+        - key_ID: 046b6c7f-0b8a-43b9-b35d-6489e6daee91
+          key_ID_extension:
+            key: ""
+          key: key
+          key_extension:
+            key: ""
+        key_container_extension:
+          key: ""
+      properties:
+        keys:
+          items:
+            $ref: "#/components/schemas/KeyItem"
+          type: array
+        key_container_extension:
+          additionalProperties: true
+          description: "Optional, for future use"
+          type: object
+      required:
+      - keys
+      type: object
+    KeyItem:
+      example:
+        key_ID: 046b6c7f-0b8a-43b9-b35d-6489e6daee91
+        key_ID_extension:
+          key: ""
+        key: key
+        key_extension:
+          key: ""
+      properties:
+        key_ID:
+          description: ID of the key (UUID)
+          format: uuid
+          type: string
+        key_ID_extension:
+          additionalProperties: true
+          description: "Optional, for future use"
+          type: object
+        key:
+          description: Key data encoded by base64
+          format: byte
+          type: string
+        key_extension:
+          additionalProperties: true
+          description: "Optional, for future use"
+          type: object
+      required:
+      - key
+      - key_ID
+      type: object
+    KeyIDs:
+      properties:
+        key_IDs:
+          items:
+            $ref: "#/components/schemas/KeyIdItem"
+          type: array
+        key_IDs_extension:
+          additionalProperties: true
+          description: "Optional, for future use"
+          type: object
+      required:
+      - key_IDs
+      type: object
+    KeyIdItem:
+      properties:
+        key_ID:
+          description: ID of the key (UUID)
+          format: uuid
+          type: string
+        key_ID_extension:
+          additionalProperties: true
+          description: "Optional, for future use"
+          type: object
+      required:
+      - key_ID
+      type: object
+    Error:
+      example:
+        details:
+        - key: ""
+        - key: ""
+        message: message
+      properties:
+        message:
+          type: string
+        details:
+          items:
+            additionalProperties: true
+            type: object
+          type: array
+      required:
+      - message
+      type: object
+

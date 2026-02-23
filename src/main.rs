@@ -187,7 +187,9 @@ async fn run_sample_client() -> Result<(), Box<dyn std::error::Error>> {
     let mut tls_stream = connector.connect(server_name, tcp_stream).await?;
 
     tls_stream
-        .write_all(b"GET /hello HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n")
+        .write_all(
+            b"GET /api/v1/keys/test-slave-sae/status HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n",
+        )
         .await?;
 
     let mut response = Vec::new();
@@ -197,11 +199,11 @@ async fn run_sample_client() -> Result<(), Box<dyn std::error::Error>> {
         }
     }
     let response_text = String::from_utf8_lossy(&response);
-    let body = response_text
+    let json = response_text
         .split_once("\r\n\r\n")
         .map(|(_, body)| body.trim())
         .unwrap_or_else(|| response_text.trim());
-    println!("{body}");
+    println!("{json}");
 
     Ok(())
 }

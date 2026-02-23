@@ -77,10 +77,23 @@ impl KeyManagementEntity<()> for Etsi014Handler {
         _method: &Method,
         _host: &Host,
         _cookies: &CookieJar,
-        _path_params: &models::GetStatusPathParams,
+        path_params: &models::GetStatusPathParams,
     ) -> Result<GetStatusResponse, ()> {
-        Ok(GetStatusResponse::Status503_ErrorOnServerSide(
-            models::Error::new("GetStatus is not implemented yet".to_string()),
+        let status = models::Status::new(
+            "placeholder-source-kme".to_string(),
+            "placeholder-target-kme".to_string(),
+            "placeholder-master-sae".to_string(),
+            path_params.slave_sae_id.clone(),
+            256,
+            0,
+            100,
+            10,
+            512,
+            128,
+            0,
+        );
+        Ok(GetStatusResponse::Status200_StatusRetrievedSuccessfully(
+            status,
         ))
     }
 }

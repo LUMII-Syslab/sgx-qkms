@@ -254,23 +254,23 @@ fn main() {
     let mode = args.get(1).map(String::as_str);
 
     match mode {
-        Some("server") => {
+        Some("kme") => {
             let gather_config = parse_gather_flag(&args[2..]);
             if let Err(e) = run_sample_server(gather_config) {
-                eprintln!("server error: {e}");
+                eprintln!("kme error: {e}");
                 std::process::exit(1);
             }
         }
-        Some("client") => {
+        Some("sae-status-req") => {
             if let Err(e) = run_sample_client() {
-                eprintln!("client error: {e}");
+                eprintln!("sae-status-req error: {e}");
                 std::process::exit(1);
             }
         }
         _ => {
             eprintln!("Usage:");
-            eprintln!("  sgx-qkms server [--gather <config.toml>]");
-            eprintln!("  sgx-qkms client");
+            eprintln!("  sgx-qkms kme [--gather <config.toml>]");
+            eprintln!("  sgx-qkms sae-status-req");
             std::process::exit(1);
         }
     }

@@ -184,6 +184,10 @@ fn run_sample_client() -> Result<(), Box<dyn Error>> {
 }
 
 fn main() {
+    mbedtls_crypto_provider()
+        .install_default()
+        .expect("Failed to install mbedtls CryptoProvider");
+
     let mut args = env::args();
     let _program = args.next();
     let mode = args.next();

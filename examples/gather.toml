@@ -1,0 +1,32 @@
+# ETSI 014 poller configuration
+#
+# The poller runs in a background thread and continuously fetches quantum keys
+# from an external ETSI QKD 014 source (e.g. a QKD device or simulator),
+# adding them to the local key store.
+#
+# Usage:
+#   sgx-qkms server --gather examples/gather.toml
+
+# External ETSI 014 endpoint to poll
+host = "127.0.0.1"
+port = 8443
+server_name = "localhost"
+
+# mTLS client credentials for authenticating to the external source
+client_cert = "certs/sae/client.crt"
+client_key = "certs/sae/client.key"
+
+# The slave SAE ID used in the enc_keys request path
+slave_sae_id = "target-sae"
+
+# Number of keys to request per poll, and key size in bits
+number = 10
+size = 256
+
+# Seconds between poll attempts
+interval_secs = 5
+
+# Whether keys gathered by this poller can be reserved via enc_keys.
+# Set to true on the KME that serves enc_keys (master side).
+# Set to false on the KME that only serves dec_keys (slave side).
+reservable = true

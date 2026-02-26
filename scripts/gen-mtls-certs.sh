@@ -9,9 +9,10 @@ CERT_DIR="certs"
 CA_DIR="$CERT_DIR/ca"
 KME_DIR="$CERT_DIR/kme"
 SAE_DIR="$CERT_DIR/sae"
+BSTORE_DIR="$CERT_DIR/bstore"
 
 rm -rf "$CERT_DIR"
-mkdir -p "$CA_DIR" "$KME_DIR" "$SAE_DIR"
+mkdir -p "$CA_DIR" "$KME_DIR" "$SAE_DIR" "$BSTORE_DIR"
 
 ###############################################################################
 # CONFIGURATION
@@ -154,7 +155,30 @@ openssl x509 -req -in "$ENROLL_DIR/enroll.csr" -CA "$CA_DIR/ca.crt" -CAkey "$CA_
     -extfile "$ENROLL_DIR/enroll.ext"
 
 ###############################################################################
-# 7) PKCS#12 KEYSTORES AND TRUSTSTORE
+# 7) BLOB STORE CERT
+###############################################################################
+CN_BSTORE="blob-store"
+
+openssl req -new -newkey rsa:4096 -nodes -sha256 \
+    -subj "$SUBJ_PREFIX/CN=$CN_BSTORE" \
+    -keyout "$BSTORE_DIR/bstore.key" -out "$BSTORE_DIR/bstore.csr"
+
+cat > "$BSTORE_DIR/bstore.ext" << EOF
+subjectAltName = @alt_names
+
+[alt_names]
+DNS.1 = $CN_BSTORE
+DNS.2 = localhost
+IP.1 = 127.0.0.1
+IP.2 = ::1
+EOF
+
+openssl x509 -req -in "$BSTORE_DIR/bstore.csr" -CA "$CA_DIR/ca.crt" -CAkey "$CA_DIR/ca.key" \
+    -CAcreateserial -out "$BSTORE_DIR/bstore.crt" -days "$days" -sha256 \
+    -extfile "$BSTORE_DIR/bstore.ext"
+
+###############################################################################
+# 8) PKCS#12 KEYSTORES AND TRUSTSTORE
 ###############################################################################
 # 6. Create PKCS#12 keystores and truststores (Java-friendly format)
 KEYSTORE_PASSWORD="changeit"

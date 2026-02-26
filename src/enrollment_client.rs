@@ -37,7 +37,7 @@ pub fn run(
         .write_pem_string(&mut rng)?;
     println!("enroll: CSR generated (subject {subject})");
 
-    let spki_der = key.write_public_der_vec()?;
+    let spki_der = extract_spki_from_csr(&csr_pem)?;
     let mut nonce = [0u8; 32];
     mbedtls::rng::Random::random(&mut rng, &mut nonce)?;
 
@@ -187,6 +187,16 @@ fn read_response_body(stream: &mut impl Read) -> Result<String, Box<dyn Error>> 
 
 fn hex_encode(bytes: &[u8]) -> String {
     bytes.iter().map(|b| format!("{b:02x}")).collect()
+}
+
+fn extract_spki_from_csr(csr_pem: &str) -> Result<Vec<u8>, Box<dyn std::error::Error>> {
+    use x509_parser::pem::parse_x509_pem;
+    use x509_parser::prelude::FromDer;
+
+    let (_, pem) = parse_x509_pem(csr_pem.as_bytes())?;
+    let (_, csr) =
+        x509_parser::certification_request::X509CertificationRequest::from_der(&pem.contents)?;
+    Ok(csr.certification_request_info.subject_pki.raw.to_vec())
 }
 
 fn print_embedded_ca_info() {

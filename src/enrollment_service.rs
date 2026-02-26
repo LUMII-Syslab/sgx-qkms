@@ -339,12 +339,25 @@ fn verify_csr_and_binding(req: &EnrollRequest) -> Result<(), String> {
             &req.quote,
         ).map_err(|e| format!("invalid quote base64: {e}"))?;
 
-        // REPORTDATA is at offset 368 in an SGX quote, 64 bytes long.
-        // First 32 bytes should match our binding value.
-        const REPORTDATA_OFFSET: usize = 368;
-        if quote_bytes.len() >= REPORTDATA_OFFSET + 64 {
-            let reportdata = &quote_bytes[REPORTDATA_OFFSET..REPORTDATA_OFFSET + 32];
+        // REPORTDATA offset depends on the structure:
+        //   - Raw SGX report (432 bytes): REPORTDATA at offset 320
+        //   - DCAP quote v3 (>432 bytes): 48-byte header + report body, so offset 368
+        const SGX_REPORT_SIZE: usize = 432;
+        const REPORT_REPORTDATA_OFFSET: usize = 320;
+        const QUOTE_REPORTDATA_OFFSET: usize = 368;
+
+        let rd_offset = if quote_bytes.len() == SGX_REPORT_SIZE {
+            println!("enroll-service: detected raw SGX report ({SGX_REPORT_SIZE} bytes)");
+            REPORT_REPORTDATA_OFFSET
+        } else {
+            QUOTE_REPORTDATA_OFFSET
+        };
+
+        if quote_bytes.len() >= rd_offset + 64 {
+            let reportdata = &quote_bytes[rd_offset..rd_offset + 32];
             if reportdata != binding.as_slice() {
+                println!("enroll-service: expected binding = {}", hex_encode(binding.as_slice()));
+                println!("enroll-service: got reportdata  = {}", hex_encode(reportdata));
                 return Err("REPORTDATA binding mismatch: quote does not match CSR SPKI + node_id + nonce".to_string());
             }
             println!("enroll-service: REPORTDATA binding verified");

@@ -5,7 +5,10 @@ use std::net::{TcpListener, TcpStream};
 use std::sync::mpsc;
 use std::sync::{Arc, Mutex};
 
-use rcgen::KeyPair;
+use mbedtls::hash::Type as MdType;
+use mbedtls::pk::Pk;
+use mbedtls::rng::Rdrand;
+use mbedtls::x509::Time;
 use rustls::{ServerConfig, ServerConnection, StreamOwned};
 use rustls_mbedcrypto_provider::mbedtls_crypto_provider;
 use sha2::{Digest, Sha256};
@@ -351,13 +354,80 @@ fn verify_csr_and_binding(req: &EnrollRequest) -> Result<(), String> {
 }
 
 fn sign_csr(csr_pem: &str, ca: &CaMaterial) -> Result<String, Box<dyn Error>> {
-    let ca_key_pair = KeyPair::from_pem(&ca.ca_key_pem)?;
-    let ca_issuer = rcgen::Issuer::from_ca_cert_pem(&ca.ca_cert_pem, ca_key_pair)?;
+    use x509_parser::pem::parse_x509_pem;
 
-    let csr_params = rcgen::CertificateSigningRequestParams::from_pem(csr_pem)?;
-    let issued = csr_params.signed_by(&ca_issuer)?;
+    let mut rng = Rdrand;
 
-    Ok(issued.pem())
+    let (_, pem) = parse_x509_pem(csr_pem.as_bytes())
+        .map_err(|e| format!("CSR PEM parse: {e}"))?;
+    let (_, csr) =
+        x509_parser::certification_request::X509CertificationRequest::from_der(&pem.contents)
+            .map_err(|e| format!("CSR DER parse: {e}"))?;
+
+    let csr_subject_dn = csr.certification_request_info.subject.to_string();
+    let spki_raw = csr.certification_request_info.subject_pki.raw;
+    let mut subject_key = Pk::from_public_key(spki_raw)?;
+
+    let ca_cert_nul = format!("{}\0", ca.ca_cert_pem.trim());
+    let ca_cert = mbedtls::x509::Certificate::from_pem(ca_cert_nul.as_bytes())?;
+    let ca_subject = ca_cert.subject()?;
+    let ca_key_nul = format!("{}\0", ca.ca_key_pem.trim());
+    let mut ca_key = Pk::from_private_key(ca_key_nul.as_bytes(), None)?;
+
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap()
+        .as_secs();
+    let not_before = time_from_epoch(now);
+    let not_after = time_from_epoch(now + 365 * 86400);
+
+    let mut serial = [0u8; 16];
+    mbedtls::rng::Random::random(&mut rng, &mut serial)?;
+    serial[0] &= 0x7f; // ensure positive ASN.1 INTEGER
+
+    let cert_pem = mbedtls::x509::certificate::Builder::new()
+        .subject(&csr_subject_dn)?
+        .issuer(&ca_subject)?
+        .subject_key(&mut subject_key)
+        .issuer_key(&mut ca_key)
+        .serial(&serial)?
+        .validity(not_before, not_after)?
+        .signature_hash(MdType::Sha256)
+        .write_pem_string(&mut rng)?;
+
+    Ok(cert_pem)
+}
+
+fn time_from_epoch(secs: u64) -> Time {
+    const DAYS_IN_MONTH: [u64; 12] = [31, 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31];
+    fn is_leap(y: u64) -> bool { y % 4 == 0 && (y % 100 != 0 || y % 400 == 0) }
+
+    let mut remaining = secs;
+    let mut year = 1970u64;
+    loop {
+        let days_in_year = if is_leap(year) { 366 } else { 365 };
+        let year_secs = days_in_year * 86400;
+        if remaining < year_secs { break; }
+        remaining -= year_secs;
+        year += 1;
+    }
+    let mut month = 0u64;
+    for m in 0..12 {
+        let mut days = DAYS_IN_MONTH[m];
+        if m == 1 && is_leap(year) { days += 1; }
+        if remaining < days * 86400 { break; }
+        remaining -= days * 86400;
+        month = m as u64 + 1;
+    }
+    let day = remaining / 86400;
+    remaining %= 86400;
+    let hour = remaining / 3600;
+    remaining %= 3600;
+    let min = remaining / 60;
+    let sec = remaining % 60;
+
+    Time::new(year as u16, (month + 1) as u8, (day + 1) as u8, hour as u8, min as u8, sec as u8)
+        .expect("invalid certificate time")
 }
 
 fn log_quote_info(quote_b64: &str) {

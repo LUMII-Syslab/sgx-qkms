@@ -18,6 +18,5 @@ base64 = "0.22"
 httparse = "1"
 percent-encoding = "2"
 sgx-isa = { version = "0.2", features = ["sgxstd"] }
-rcgen = { version = "0.14", features = ["x509-parser"] }
+mbedtls = { version = "0.13", default-features = false, features = ["std", "x509", "rdrand"] }
 sha2 = "0.10"
-getrandom = "0.2"

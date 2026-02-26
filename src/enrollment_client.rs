@@ -5,7 +5,9 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use base64::Engine;
-use rcgen::{CertificateParams, KeyPair};
+use mbedtls::hash::Type as MdType;
+use mbedtls::pk::Pk;
+use mbedtls::rng::Rdrand;
 use rustls::pki_types::ServerName;
 use rustls::{ClientConfig, ClientConnection, StreamOwned};
 use rustls_mbedcrypto_provider::mbedtls_crypto_provider;
@@ -23,22 +25,21 @@ pub fn run(
 ) -> Result<(), Box<dyn Error>> {
     print_embedded_ca_info();
     println!("enroll: generating ECDSA P-256 key pair...");
-    let key_pair = KeyPair::generate()?;
-    let key_pem = key_pair.serialize_pem();
+    let mut rng = Rdrand;
+    let mut key = Pk::generate_ec(&mut rng, mbedtls::pk::EcGroupId::SecP256R1)?;
+    let key_pem = key.write_private_pem_string()?;
 
-    let san_uri = format!("urn:qkms:{node_id}");
-    let mut params = CertificateParams::new(vec![san_uri.clone()])?;
-    params
-        .distinguished_name
-        .push(rcgen::DnType::CommonName, node_id);
+    let subject = format!("CN={node_id}");
+    let csr_pem = mbedtls::x509::csr::Builder::new()
+        .subject(&subject)?
+        .key(&mut key)
+        .signature_hash(MdType::Sha256)
+        .write_pem_string(&mut rng)?;
+    println!("enroll: CSR generated (subject {subject})");
 
-    let csr = params.serialize_request(&key_pair)?;
-    let csr_pem = csr.pem()?;
-    println!("enroll: CSR generated (subject CN={node_id}, SAN {san_uri})");
-
-    let spki_der = rcgen::PublicKeyData::subject_public_key_info(&key_pair);
+    let spki_der = key.write_public_der_vec()?;
     let mut nonce = [0u8; 32];
-    getrandom::getrandom(&mut nonce).expect("failed to generate random nonce");
+    mbedtls::rng::Random::random(&mut rng, &mut nonce)?;
 
     let mut hasher = Sha256::new();
     hasher.update(&spki_der);

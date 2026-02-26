@@ -1,9 +1,8 @@
-use std::collections::HashMap;
 use std::sync::Arc;
 
 use serde::Serialize;
 
-use crate::api_models::{ErrorResponse, KeyContainer, KeyItem, Status};
+use crate::api_models::{ErrorResponse, KeyContainer, KeyIDs, KeyItem, KeyRequest, Status};
 use crate::http_protocol::{HttpMethod, HttpResponse, ParsedRequest};
 use crate::key_store::KeyStore;
 
@@ -19,10 +18,10 @@ pub fn route_request(
             handle_get_status(slave_sae_id, client_identity, store)
         }
         (HttpMethod::Get | HttpMethod::Post, Endpoint::EncKeys { slave_sae_id }) => {
-            handle_enc_keys(store, &request.query_params, slave_sae_id, client_identity)
+            handle_enc_keys(store, request, slave_sae_id, client_identity)
         }
         (HttpMethod::Get | HttpMethod::Post, Endpoint::DecKeys { master_sae_id }) => {
-            handle_dec_keys(store, &request.query_params, master_sae_id, client_identity)
+            handle_dec_keys(store, request, master_sae_id, client_identity)
         }
         (HttpMethod::Other, Endpoint::Status { .. })
         | (HttpMethod::Other, Endpoint::EncKeys { .. })
@@ -56,14 +55,22 @@ fn handle_get_status(
 
 fn handle_enc_keys(
     store: &Arc<KeyStore>,
-    query_params: &HashMap<String, String>,
+    request: &ParsedRequest,
     _slave_sae_id: &str,
     _client_identity: &str,
 ) -> HttpResponse {
-    let count: usize = query_params
-        .get("number")
-        .and_then(|v| v.parse().ok())
-        .unwrap_or(1);
+    let count: usize = if let Some(body) = &request.body {
+        match serde_json::from_str::<KeyRequest>(body) {
+            Ok(kr) => kr.number.unwrap_or(1) as usize,
+            Err(_) => return error_response(400, "invalid JSON body for enc_keys"),
+        }
+    } else {
+        request
+            .query_params
+            .get("number")
+            .and_then(|v| v.parse().ok())
+            .unwrap_or(1)
+    };
 
     let reserved = store.reserve_keys(count);
     if reserved.is_empty() {
@@ -89,30 +96,40 @@ fn handle_enc_keys(
 
 fn handle_dec_keys(
     store: &Arc<KeyStore>,
-    query_params: &HashMap<String, String>,
+    request: &ParsedRequest,
     _master_sae_id: &str,
     _client_identity: &str,
 ) -> HttpResponse {
-    let key_id = match query_params.get("key_ID") {
-        Some(id) => id,
-        None => return error_response(400, "missing key_ID parameter"),
+    let key_ids: Vec<String> = if let Some(body) = &request.body {
+        match serde_json::from_str::<KeyIDs>(body) {
+            Ok(kid) => kid.key_ids.into_iter().map(|k| k.key_id).collect(),
+            Err(_) => return error_response(400, "invalid JSON body for dec_keys"),
+        }
+    } else {
+        match request.query_params.get("key_ID") {
+            Some(id) => vec![id.clone()],
+            None => return error_response(400, "missing key_ID parameter"),
+        }
     };
 
-    match store.retrieve_key(key_id) {
-        Some((id, val)) => {
-            let container = KeyContainer {
-                keys: vec![KeyItem {
-                    key_id: id,
-                    key_id_extension: None,
-                    key: val,
-                    key_extension: None,
-                }],
-                key_container_extension: None,
-            };
-            json_response(200, &container)
+    let mut keys = Vec::with_capacity(key_ids.len());
+    for key_id in &key_ids {
+        match store.retrieve_key(key_id) {
+            Some((id, val)) => keys.push(KeyItem {
+                key_id: id,
+                key_id_extension: None,
+                key: val,
+                key_extension: None,
+            }),
+            None => return error_response(400, &format!("key not found: {key_id}")),
         }
-        None => error_response(400, "key not found"),
     }
+
+    let container = KeyContainer {
+        keys,
+        key_container_extension: None,
+    };
+    json_response(200, &container)
 }
 
 fn handle_not_found() -> HttpResponse {

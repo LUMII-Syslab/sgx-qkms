@@ -119,7 +119,7 @@ fn get_sgx_quote(binding: &[u8]) -> Vec<u8> {
 
     // In a full implementation, this report would be sent to a quoting enclave
     // to obtain an ECDSA quote. For now, return the raw report bytes.
-    report.as_ref().to_vec()
+    AsRef::<[u8]>::as_ref(&report).to_vec()
 }
 
 #[cfg(not(target_env = "sgx"))]

@@ -87,6 +87,59 @@ fn load_private_key(path: &str) -> PrivateKeyDer<'static> {
         .unwrap_or_else(|| panic!("No private key found in {path}"))
 }
 
+fn parse_certs_pem(pem: &[u8]) -> Vec<CertificateDer<'static>> {
+    rustls_pemfile::certs(&mut &*pem)
+        .collect::<Result<Vec<_>, _>>()
+        .expect("Failed to parse certificate PEM")
+}
+
+fn parse_private_key_pem(pem: &[u8]) -> PrivateKeyDer<'static> {
+    rustls_pemfile::private_key(&mut &*pem)
+        .expect("Failed to parse private key PEM")
+        .expect("No private key found in PEM data")
+}
+
+fn fetch_blob(blob_store_addr: &str, name: &str) -> Result<Vec<u8>, Box<dyn Error>> {
+    let ca_store = load_ca_cert();
+    let config = ClientConfig::builder_with_provider(Arc::new(mbedtls_crypto_provider()))
+        .with_protocol_versions(&[&rustls::version::TLS13])?
+        .with_root_certificates(ca_store)
+        .with_no_client_auth();
+    let config = Arc::new(config);
+
+    let host = blob_store_addr.split(':').next().unwrap_or(blob_store_addr);
+    let server_name = ServerName::try_from(host.to_string())?;
+
+    let mut tcp = TcpStream::connect(blob_store_addr)?;
+    let mut conn = ClientConnection::new(config, server_name)?;
+    while conn.is_handshaking() {
+        conn.complete_io(&mut tcp)?;
+    }
+    let mut tls = StreamOwned::new(conn, tcp);
+
+    let request = format!(
+        "GET /blob/{name} HTTP/1.1\r\nHost: {blob_store_addr}\r\nConnection: close\r\n\r\n"
+    );
+    tls.write_all(request.as_bytes())?;
+    tls.flush()?;
+
+    let mut buf = Vec::new();
+    let _ = tls.read_to_end(&mut buf);
+
+    let header_end = buf
+        .windows(4)
+        .position(|w| w == b"\r\n\r\n")
+        .ok_or("invalid HTTP response from blob-store")?;
+
+    let status_line = std::str::from_utf8(&buf[..buf.iter().position(|&b| b == b'\r').unwrap_or(header_end)])
+        .unwrap_or("");
+    if !status_line.contains("200") {
+        return Err(format!("blob-store GET /blob/{name}: {status_line}").into());
+    }
+
+    Ok(buf[header_end + 4..].to_vec())
+}
+
 pub fn print_cert_info(label: &str, cert_path: &str) {
     let certs = load_certs(cert_path);
     for cert_der in &certs {
@@ -125,11 +178,13 @@ fn extract_client_identity(cert: &CertificateDer<'_>) -> Option<String> {
     None
 }
 
-fn run_sample_server(gather_config_path: Option<&str>) -> Result<(), Box<dyn Error>> {
-    const ADDR: &str = "127.0.0.1:8443";
-    const SERVER_CERT_PATH: &str = "certs/sae/server.crt";
-    const SERVER_KEY_PATH: &str = "certs/sae/server.key";
-
+fn run_sample_server(
+    gather_config_path: Option<&str>,
+    blob_store_addr: &str,
+    cert_blob: &str,
+    key_blob: &str,
+    addr: &str,
+) -> Result<(), Box<dyn Error>> {
     let store = Arc::new(key_store::KeyStore::new());
 
     if let Some(config_path) = gather_config_path {
@@ -140,9 +195,14 @@ fn run_sample_server(gather_config_path: Option<&str>) -> Result<(), Box<dyn Err
         eprintln!("warning: no --gather config provided; key store will remain empty until keys are added externally");
     }
 
+    println!("kme: fetching certificate '{cert_blob}' from blob-store at {blob_store_addr}...");
+    let cert_pem = fetch_blob(blob_store_addr, cert_blob)?;
+    println!("kme: fetching key '{key_blob}' from blob-store at {blob_store_addr}...");
+    let key_pem = fetch_blob(blob_store_addr, key_blob)?;
+
     let ca_cert_store = load_ca_cert();
-    let server_cert_chain = load_certs(SERVER_CERT_PATH);
-    let server_key = load_private_key(SERVER_KEY_PATH);
+    let server_cert_chain = parse_certs_pem(&cert_pem);
+    let server_key = parse_private_key_pem(&key_pem);
 
     let client_verifier = WebPkiClientVerifier::builder(Arc::new(ca_cert_store)).build()?;
     let server_config = ServerConfig::builder_with_provider(Arc::new(mbedtls_crypto_provider()))
@@ -151,8 +211,8 @@ fn run_sample_server(gather_config_path: Option<&str>) -> Result<(), Box<dyn Err
         .with_single_cert(server_cert_chain, server_key)?;
 
     let server_config = Arc::new(server_config);
-    let listener = TcpListener::bind(ADDR)?;
-    println!("sample mTLS server listening on {ADDR}");
+    let listener = TcpListener::bind(addr)?;
+    println!("kme: mTLS server listening on {addr}");
 
     loop {
         let (tcp_stream, peer_addr) = match listener.accept() {
@@ -352,8 +412,17 @@ fn main() {
 
     match mode {
         Some("kme") => {
-            let gather_config = parse_named_arg(&args[2..], "--gather");
-            if let Err(e) = run_sample_server(gather_config) {
+            let rest = &args[2..];
+            let gather_config = parse_named_arg(rest, "--gather");
+            let blob_store = parse_named_arg(rest, "--blob-store")
+                .expect("--blob-store is required");
+            let cert_blob = parse_named_arg(rest, "--cert-blob")
+                .unwrap_or("enrolled.crt");
+            let key_blob = parse_named_arg(rest, "--key-blob")
+                .unwrap_or("enrolled.key");
+            let addr = parse_named_arg(rest, "--addr")
+                .unwrap_or("0.0.0.0:8443");
+            if let Err(e) = run_sample_server(gather_config, blob_store, cert_blob, key_blob, addr) {
                 eprintln!("kme error: {e}");
                 std::process::exit(1);
             }
@@ -424,7 +493,7 @@ fn main() {
         }
         _ => {
             eprintln!("Usage:");
-            eprintln!("  sgx-qkms kme [--gather <config.toml>]");
+            eprintln!("  sgx-qkms kme --blob-store <host:port> [--cert-blob <name>] [--key-blob <name>] [--addr <host:port>] [--gather <config.toml>]");
             eprintln!("  sgx-qkms sae-status-req");
             eprintln!("  sgx-qkms attestation-report");
             eprintln!("  sgx-qkms ca-info");

@@ -245,6 +245,36 @@ fn run_sample_client() -> Result<(), Box<dyn Error>> {
     Ok(())
 }
 
+#[cfg(target_env = "sgx")]
+fn print_attestation_report() {
+    use sgx_isa::{Report, Targetinfo};
+
+    let targetinfo = Targetinfo::from(Report::for_self());
+    let report = Report::for_target(&targetinfo, &[0; 64]);
+
+    println!("MRENCLAVE: {}", hex(&report.mrenclave));
+    println!("MRSIGNER:  {}", hex(&report.mrsigner));
+    println!("ISV ProdID: {}", report.isvprodid);
+    println!("ISV SVN:    {}", report.isvsvn);
+    println!(
+        "Report (raw {} bytes): {}",
+        std::mem::size_of_val(&report),
+        hex(report.as_ref())
+    );
+}
+
+#[cfg(not(target_env = "sgx"))]
+fn print_attestation_report() {
+    eprintln!("error: attestation reports are only available inside an SGX enclave");
+    eprintln!("       build with: cargo build --target x86_64-fortanix-unknown-sgx");
+    std::process::exit(1);
+}
+
+#[cfg(target_env = "sgx")]
+fn hex(bytes: &[u8]) -> String {
+    bytes.iter().map(|b| format!("{b:02x}")).collect()
+}
+
 fn main() {
     mbedtls_crypto_provider()
         .install_default()
@@ -267,10 +297,14 @@ fn main() {
                 std::process::exit(1);
             }
         }
+        Some("attestation-report") => {
+            print_attestation_report();
+        }
         _ => {
             eprintln!("Usage:");
             eprintln!("  sgx-qkms kme [--gather <config.toml>]");
             eprintln!("  sgx-qkms sae-status-req");
+            eprintln!("  sgx-qkms attestation-report");
             std::process::exit(1);
         }
     }

@@ -950,6 +950,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "sgx-isa"
+version = "0.2.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "d0756ae39de704225ed0c5e0c6bf108d24e88f0ffdafa9c79917c7df90008f68"
+dependencies = [
+ "bitflags 1.3.2",
+]
+
+[[package]]
 name = "sgx-qkms"
 version = "0.1.0"
 dependencies = [
@@ -962,6 +971,7 @@ dependencies = [
  "rustls-pemfile",
  "serde",
  "serde_json",
+ "sgx-isa",
  "toml",
  "uuid",
  "x509-parser",

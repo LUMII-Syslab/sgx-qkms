@@ -17,3 +17,4 @@ uuid = { version = "1", features = ["v4"] }
 base64 = "0.22"
 httparse = "1"
 percent-encoding = "2"
+sgx-isa = { version = "0.2", features = ["sgxstd"] }

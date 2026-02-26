@@ -122,6 +122,8 @@ fn run_sample_server(gather_config_path: Option<&str>) -> Result<(), Box<dyn Err
         let toml_str = fs::read_to_string(config_path)?;
         let cfg: GatherConfig = toml::from_str(&toml_str)?;
         start_poller(cfg, store.clone());
+    } else {
+        eprintln!("warning: no --gather config provided; key store will remain empty until keys are added externally");
     }
 
     let ca_cert_store = load_ca_cert();

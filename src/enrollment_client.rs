@@ -22,6 +22,7 @@ pub fn run(
     ra_port: u16,
     out_cert: &str,
     out_key: &str,
+    blob_store: Option<&str>,
 ) -> Result<(), Box<dyn Error>> {
     print_embedded_ca_info();
     println!("enroll: generating ECDSA P-256 key pair...");
@@ -99,10 +100,19 @@ pub fn run(
         }
     };
 
-    std::fs::write(out_cert, &cert_pem)?;
-    std::fs::write(out_key, &key_pem)?;
-    println!("enroll: certificate saved to {out_cert}");
-    println!("enroll: private key saved to {out_key}");
+    if let Some(bs_addr) = blob_store {
+        let bs_host = bs_addr.split(':').next().unwrap_or(bs_addr);
+        let bs_server_name: ServerName<'_> = ServerName::try_from(bs_host.to_string())?;
+        tls_put(bs_addr, &bs_server_name, &format!("/blob/{out_cert}"), cert_pem.as_bytes())?;
+        println!("enroll: certificate stored to blob-store as '{out_cert}'");
+        tls_put(bs_addr, &bs_server_name, &format!("/blob/{out_key}"), key_pem.as_bytes())?;
+        println!("enroll: private key stored to blob-store as '{out_key}'");
+    } else {
+        std::fs::write(out_cert, &cert_pem)?;
+        std::fs::write(out_key, &key_pem)?;
+        println!("enroll: certificate saved to {out_cert}");
+        println!("enroll: private key saved to {out_key}");
+    }
 
     Ok(())
 }
@@ -151,6 +161,26 @@ fn tls_post(addr: &str, server_name: &ServerName<'_>, path: &str, body: &str) ->
         body.len()
     );
     tls.write_all(request.as_bytes())?;
+    tls.flush()?;
+
+    read_response_body(&mut tls)
+}
+
+fn tls_put(addr: &str, server_name: &ServerName<'_>, path: &str, body: &[u8]) -> Result<String, Box<dyn Error>> {
+    let config = make_tls_config()?;
+    let mut tcp = TcpStream::connect(addr)?;
+    let mut conn = ClientConnection::new(config, server_name.to_owned())?;
+    while conn.is_handshaking() {
+        conn.complete_io(&mut tcp)?;
+    }
+    let mut tls = StreamOwned::new(conn, tcp);
+
+    let header = format!(
+        "PUT {path} HTTP/1.1\r\nHost: {addr}\r\nContent-Type: application/octet-stream\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+        body.len()
+    );
+    tls.write_all(header.as_bytes())?;
+    tls.write_all(body)?;
     tls.flush()?;
 
     read_response_body(&mut tls)

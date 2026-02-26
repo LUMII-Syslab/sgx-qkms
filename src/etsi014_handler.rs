@@ -23,11 +23,8 @@ pub fn route_request(
         (HttpMethod::Get | HttpMethod::Post, Endpoint::DecKeys { master_sae_id }) => {
             handle_dec_keys(store, request, master_sae_id, client_identity)
         }
-        (HttpMethod::Other, Endpoint::Status { .. })
-        | (HttpMethod::Other, Endpoint::EncKeys { .. })
-        | (HttpMethod::Other, Endpoint::DecKeys { .. })
-        | (_, Endpoint::Status { .. }) => method_not_allowed(),
         (_, Endpoint::Unknown) => handle_not_found(),
+        _ => method_not_allowed(),
     }
 }
 

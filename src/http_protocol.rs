@@ -6,6 +6,8 @@ use std::io::Read;
 pub enum HttpMethod {
     Get,
     Post,
+    Put,
+    Delete,
     Other,
 }
 
@@ -14,6 +16,7 @@ pub struct ParsedRequest {
     pub path: String,
     pub query_params: HashMap<String, String>,
     pub body: Option<String>,
+    pub raw_body: Option<Vec<u8>>,
 }
 
 pub struct HttpResponse {
@@ -43,6 +46,50 @@ impl HttpResponse {
             self.body
         );
         response.into_bytes()
+    }
+}
+
+pub struct BinaryHttpResponse {
+    pub status: u16,
+    pub content_type: &'static str,
+    pub body: Vec<u8>,
+}
+
+impl BinaryHttpResponse {
+    pub fn to_http_bytes(&self) -> Vec<u8> {
+        let status_text = match self.status {
+            200 => "OK",
+            400 => "Bad Request",
+            401 => "Unauthorized",
+            404 => "Not Found",
+            405 => "Method Not Allowed",
+            503 => "Service Unavailable",
+            _ => "Internal Server Error",
+        };
+
+        let mut out = format!(
+            "HTTP/1.1 {} {}\r\nContent-Type: {}\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+            self.status, status_text, self.content_type, self.body.len()
+        )
+        .into_bytes();
+        out.extend_from_slice(&self.body);
+        out
+    }
+
+    pub fn json(status: u16, body: String) -> Self {
+        Self {
+            status,
+            content_type: "application/json",
+            body: body.into_bytes(),
+        }
+    }
+
+    pub fn octet_stream(body: Vec<u8>) -> Self {
+        Self {
+            status: 200,
+            content_type: "application/octet-stream",
+            body,
+        }
     }
 }
 
@@ -111,6 +158,8 @@ pub fn parse_http_request(raw: &[u8]) -> Result<ParsedRequest, Box<dyn Error>> {
     let method = match req.method.ok_or("missing HTTP method")? {
         "GET" => HttpMethod::Get,
         "POST" => HttpMethod::Post,
+        "PUT" => HttpMethod::Put,
+        "DELETE" => HttpMethod::Delete,
         _ => HttpMethod::Other,
     };
 
@@ -121,10 +170,12 @@ pub fn parse_http_request(raw: &[u8]) -> Result<ParsedRequest, Box<dyn Error>> {
         None => (decode_percent(raw_path), HashMap::new()),
     };
 
-    let body = if raw.len() > header_len {
-        Some(String::from_utf8_lossy(&raw[header_len..]).into_owned())
+    let (body, raw_body) = if raw.len() > header_len {
+        let bytes = raw[header_len..].to_vec();
+        let text = String::from_utf8_lossy(&bytes).into_owned();
+        (Some(text), Some(bytes))
     } else {
-        None
+        (None, None)
     };
 
     Ok(ParsedRequest {
@@ -132,6 +183,7 @@ pub fn parse_http_request(raw: &[u8]) -> Result<ParsedRequest, Box<dyn Error>> {
         path,
         query_params,
         body,
+        raw_body,
     })
 }
 

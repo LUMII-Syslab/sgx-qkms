@@ -21,6 +21,7 @@ use x509_parser::{
 struct EmbeddedAssets;
 
 mod api_models;
+mod blob_store;
 mod enrollment_client;
 mod enrollment_models;
 mod enrollment_service;
@@ -401,8 +402,22 @@ fn main() {
                 .unwrap_or("enrolled.crt");
             let out_key = parse_named_arg(rest, "--out-key")
                 .unwrap_or("enrolled.key");
-            if let Err(e) = enrollment_client::run(node_id, ra_host, ra_port, out_cert, out_key) {
+            let blob_store = parse_named_arg(rest, "--blob-store");
+            if let Err(e) = enrollment_client::run(node_id, ra_host, ra_port, out_cert, out_key, blob_store) {
                 eprintln!("enroll error: {e}");
+                std::process::exit(1);
+            }
+        }
+        Some("blob-store") => {
+            let rest = &args[2..];
+            let server_cert = parse_named_arg(rest, "--server-cert")
+                .unwrap_or("certs/blob/blob.crt");
+            let server_key = parse_named_arg(rest, "--server-key")
+                .unwrap_or("certs/blob/blob.key");
+            let addr = parse_named_arg(rest, "--addr")
+                .unwrap_or("0.0.0.0:8445");
+            if let Err(e) = blob_store::run(addr, server_cert, server_key) {
+                eprintln!("blob-store error: {e}");
                 std::process::exit(1);
             }
         }
@@ -413,7 +428,8 @@ fn main() {
             eprintln!("  sgx-qkms attestation-report");
             eprintln!("  sgx-qkms ca-info");
             eprintln!("  sgx-qkms enroll-service [--ca-cert <path>] [--ca-key <path>] [--addr <host:port>] [--interactive]");
-            eprintln!("  sgx-qkms enroll --node-id <id> [--ra-host <host>] [--ra-port <port>] [--out-cert <path>] [--out-key <path>]");
+            eprintln!("  sgx-qkms enroll --node-id <id> [--ra-host <host>] [--ra-port <port>] [--out-cert <path>] [--out-key <path>] [--blob-store <host:port>]");
+            eprintln!("  sgx-qkms blob-store [--server-cert <path>] [--server-key <path>] [--addr <host:port>]");
             std::process::exit(1);
         }
     }
